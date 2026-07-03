@@ -2,6 +2,7 @@ name: Build Node.js for Android
 
 on:
   workflow_dispatch:
+  push:
 
 jobs:
   build:
