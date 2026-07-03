@@ -20,11 +20,6 @@ jobs:
           repository: termux/termux-packages
           path: termux-packages
 
-      - name: Setup Termux Build Environment
-        run: |
-          cd termux-packages
-          ./scripts/setup-ubuntu.sh
-
       - name: Patch Node.js to build as shared library
         run: |
           cd termux-packages/packages/nodejs
