@@ -1,63 +1,124 @@
 name: Build Node.js for Android
-
 on:
   workflow_dispatch:
+    inputs:
+      node_ref:
+        description: 'Node.js tag/branch to build'
+        required: true
+        default: 'v22.12.0'
+      ndk_version:
+        description: 'NDK version (folder name after unzip)'
+        required: true
+        default: 'r26c'
+      android_api:
+        description: 'Android SDK/API level (min 24)'
+        required: true
+        default: '24'
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [arm64, arm, x86_64]
+        include:
+          - arch: arm64
+            abi: arm64-v8a
+          - arch: arm
+            abi: armeabi-v7a
+          - arch: x86_64
+            abi: x86_64
+
     steps:
       - name: Free up disk space
         run: |
           sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost "$AGENT_TOOLSDIRECTORY"
 
+      - name: Install build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3 python3-pip make g++ gcc
+
       - name: Install Android NDK
         run: |
-          # Node 22 officially recommends NDK r26 or newer for Android builds
-          wget -q https://dl.google.com/android/repository/android-ndk-r26c-linux.zip
-          unzip -q android-ndk-r26c-linux.zip
-          echo "ANDROID_NDK_HOME=$PWD/android-ndk-r26c" >> $GITHUB_ENV
+          wget -q "https://dl.google.com/android/repository/android-ndk-${{ github.event.inputs.ndk_version }}-linux.zip"
+          unzip -q "android-ndk-${{ github.event.inputs.ndk_version }}-linux.zip"
+          echo "ANDROID_NDK_HOME=$PWD/android-ndk-${{ github.event.inputs.ndk_version }}" >> $GITHUB_ENV
 
       - name: Checkout Node.js
         uses: actions/checkout@v4
         with:
           repository: nodejs/node
-          ref: v22.12.0
+          ref: ${{ github.event.inputs.node_ref }}
           path: node
 
-      - name: Configure and Build libnode.so
+      - name: Patch android_configure.py to build shared lib
+        run: |
+          cd node
+          # Confirm the exact anchor string still exists before patching.
+          # If Node changes this line upstream, fail loudly instead of
+          # silently shipping a non-shared build.
+          grep -q -- '--cross-compiling' android_configure.py || {
+            echo "ERROR: '--cross-compiling' string not found in android_configure.py — Node source has changed, update this workflow." >&2
+            exit 1
+          }
+
+          sed -i 's|--cross-compiling|--cross-compiling --shared --without-npm --without-inspector --with-intl=small-icu|' android_configure.py
+
+          # Verify the patch actually took (sed is silent on no-match)
+          grep -q -- '--shared' android_configure.py || {
+            echo "ERROR: patch did not apply — '--shared' flag missing after sed." >&2
+            exit 1
+          }
+
+      - name: Configure and build libnode.so (${{ matrix.arch }})
         run: |
           cd node
           export CC_host="gcc"
           export CXX_host="g++"
-          
-          # android-configure wrapper doesn't accept extra arguments, 
-          # so we patch it to include our shared library and size-reduction flags.
-          sed -i 's|--cross-compiling|--cross-compiling --shared --without-npm --without-inspector --with-intl=small-icu|' android_configure.py
-          
-          # Run Node.js's native android-configure script
-          # API level 24 is a good modern baseline for Android
-          ./android-configure $ANDROID_NDK_HOME 24 arm64
-          
-          # Build the shared library (make will automatically build libnode.so because of --shared)
-          make -j$(nproc)
 
-      - name: Collect artifacts
+          ./android-configure "$ANDROID_NDK_HOME" ${{ github.event.inputs.android_api }} ${{ matrix.arch }}
+          make -j"$(nproc)"
+
+      - name: Verify shared library was produced
         run: |
-          mkdir -p output/bin/arm64-v8a
+          cd node
+          SOFILE=$(find out -name "libnode.so.*" -o -name "libnode.so" | head -n1)
+          if [ -z "$SOFILE" ]; then
+            echo "ERROR: no libnode.so* produced — build likely fell back to a static binary." >&2
+            find out -maxdepth 3 -iname "*node*" >&2
+            exit 1
+          fi
+          echo "Found: $SOFILE"
+          echo "SOFILE=$SOFILE" >> $GITHUB_ENV
+
+      - name: Collect and rename artifacts (fix Android soname requirement)
+        run: |
+          mkdir -p output/bin/${{ matrix.abi }}
           mkdir -p output/include/node
-          
-          # Copy the shared library
-          find node/out -name "libnode*.so*" -exec cp {} output/bin/arm64-v8a/ \;
-          
-          # Copy necessary headers for C++ JNI bridge compilation
+          mkdir -p output/include/uv
+
+          # Android's dynamic linker / System.loadLibrary() and your CMake
+          # IMPORTED_LOCATION expect an exact "libnode.so" filename.
+          # The raw build output is versioned (libnode.so.<NODE_MODULE_VERSION>).
+          # objcopy rewrites the internal SONAME to match, then we copy under
+          # the plain name so it links/loads correctly on-device.
+          if command -v objcopy >/dev/null 2>&1; then
+            objcopy --set-soname libnode.so "$SOFILE" "output/bin/${{ matrix.abi }}/libnode.so"
+          else
+            cp "$SOFILE" "output/bin/${{ matrix.abi }}/libnode.so"
+          fi
+
+          # Headers needed for embedding: node core + N-API + libuv.
           cp node/src/*.h output/include/node/
           cp -r node/deps/v8/include/* output/include/node/
-          cp -r node/deps/uv/include/* output/include/node/
+          cp -r node/deps/uv/include/* output/include/uv/
 
-      - name: Upload libnode.so Artifact
+      - name: Upload libnode artifact (${{ matrix.abi }})
         uses: actions/upload-artifact@v4
         with:
-          name: libnode-arm64-v8a
+          name: libnode-${{ matrix.abi }}
           path: output/
+          if-no-files-found: error
