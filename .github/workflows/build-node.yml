@@ -35,7 +35,16 @@ jobs:
       - name: Install build prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install -y python3 python3-pip make g++ gcc
+          sudo apt-get install -y make g++ gcc
+
+      - name: Set up Python 3.11
+        # android-configure's shell preamble probes for python3.11 down to
+        # python3.6 explicitly and rejects 3.12+ on older Node tags (like
+        # v20.19.0). ubuntu-latest now defaults to 3.12.3, so install 3.11
+        # and put it on PATH ahead of the build steps.
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
       - name: Install Android NDK
         run: |
