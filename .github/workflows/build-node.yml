@@ -25,12 +25,12 @@ jobs:
           cd termux-packages/packages/nodejs
           # Termux compiles Node.js as an executable by default.
           # We inject --shared into the ./configure arguments in termux_step_configure.
-          sed -i 's/--dest-os=android \\/--dest-os=android \\n\t\t--shared \\/' build.sh
+          python3 -c "content = open('build.sh').read(); content = content.replace('\t./configure \\\n', '\t./configure \\\n\t\t--shared \\\n'); open('build.sh', 'w').write(content)"
 
       - name: Build Node.js (aarch64)
         run: |
           cd termux-packages
-          ./scripts/run-docker.sh ./build-package.sh -a aarch64 nodejs
+          ./scripts/run-docker.sh ./build-package.sh -a aarch64 -I nodejs
 
       - name: Extract libnode.so
         run: |
