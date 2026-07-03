@@ -40,8 +40,8 @@ jobs:
           # API level 24 is a good modern baseline for Android
           ./android-configure $ANDROID_NDK_HOME 24 arm64
           
-          # Build only the libnode shared library
-          make -j$(nproc) libnode
+          # Build the shared library (make will automatically build libnode.so because of --shared)
+          make -j$(nproc)
 
       - name: Collect artifacts
         run: |
