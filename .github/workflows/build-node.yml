@@ -1,0 +1,53 @@
+name: Build Node.js for Android
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf "/usr/local/share/boost"
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+
+      - name: Checkout termux-packages
+        uses: actions/checkout@v4
+        with:
+          repository: termux/termux-packages
+          path: termux-packages
+
+      - name: Setup Termux Build Environment
+        run: |
+          cd termux-packages
+          ./scripts/setup-ubuntu.sh
+
+      - name: Patch Node.js to build as shared library
+        run: |
+          cd termux-packages/packages/nodejs
+          # Termux compiles Node.js as an executable by default.
+          # We inject --shared into the configure arguments to produce libnode.so.
+          sed -i 's/TERMUX_PKG_EXTRA_CONFIGURE_ARGS="/TERMUX_PKG_EXTRA_CONFIGURE_ARGS="--shared /' build.sh
+
+      - name: Build Node.js (aarch64)
+        run: |
+          cd termux-packages
+          # The -I flag forces downloading of the docker image
+          # The -a flag specifies the architecture
+          ./build-package.sh -I -a aarch64 nodejs
+
+      - name: Extract libnode.so
+        run: |
+          mkdir -p output
+          cd output
+          dpkg -x ../termux-packages/output/nodejs*.deb .
+          find . -name "libnode.so*" -exec cp {} . \;
+
+      - name: Upload libnode.so Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libnode-aarch64
+          path: output/libnode.so*
