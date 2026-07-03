@@ -32,14 +32,13 @@ jobs:
           export CC_host="gcc"
           export CXX_host="g++"
           
+          # android-configure wrapper doesn't accept extra arguments, 
+          # so we patch it to include our shared library and size-reduction flags.
+          sed -i 's|--cross-compiling|--cross-compiling --shared --without-npm --without-inspector --with-intl=small-icu|' android_configure.py
+          
           # Run Node.js's native android-configure script
           # API level 24 is a good modern baseline for Android
-          ./android-configure $ANDROID_NDK_HOME 24 arm64 \
-            --shared \
-            --without-npm \
-            --without-inspector \
-            --openssl-no-asm \
-            --with-intl=small-icu
+          ./android-configure $ANDROID_NDK_HOME 24 arm64
           
           # Build only the libnode shared library
           make -j$(nproc) libnode
