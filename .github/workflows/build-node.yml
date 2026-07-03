@@ -20,6 +20,11 @@ jobs:
           repository: termux/termux-packages
           path: termux-packages
 
+      - name: Setup Termux Android SDK
+        run: |
+          cd termux-packages
+          ./scripts/setup-android-sdk.sh
+
       - name: Patch Node.js to build as shared library
         run: |
           cd termux-packages/packages/nodejs
