@@ -35,7 +35,7 @@ jobs:
           sed -i '/--shared-zlib/d' build.sh
           sed -i '/--with-intl=system-icu/d' build.sh
           # Inject --shared
-          sed -i '/^\s*\.\/configure \\/a \t\t--shared \\' build.sh
+          awk '{ print } /^[[:space:]]*\.\/configure \\/ { print "\t\t--shared \\" }' build.sh > build.sh.tmp && mv build.sh.tmp build.sh
 
       - name: Build Node.js (aarch64)
         run: |
