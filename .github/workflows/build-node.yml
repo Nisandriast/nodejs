@@ -20,13 +20,6 @@ jobs:
           repository: termux/termux-packages
           path: termux-packages
 
-      - name: Setup Termux Android SDK
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y openjdk-17-jdk-headless
-          cd termux-packages
-          ./scripts/setup-android-sdk.sh
-
       - name: Patch Node.js to build as shared library
         run: |
           cd termux-packages/packages/nodejs
@@ -37,9 +30,7 @@ jobs:
       - name: Build Node.js (aarch64)
         run: |
           cd termux-packages
-          # The -I flag forces downloading of the docker image
-          # The -a flag specifies the architecture
-          ./build-package.sh -I -a aarch64 nodejs
+          ./scripts/run-docker.sh ./build-package.sh -a aarch64 nodejs
 
       - name: Extract libnode.so
         run: |
