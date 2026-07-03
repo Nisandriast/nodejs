@@ -2,55 +2,63 @@ name: Build Node.js for Android
 
 on:
   workflow_dispatch:
-  push:
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    
     steps:
       - name: Free up disk space
         run: |
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /opt/ghc
-          sudo rm -rf "/usr/local/share/boost"
-          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost "$AGENT_TOOLSDIRECTORY"
 
-      - name: Checkout termux-packages
+      - name: Install Android NDK
+        run: |
+          # Node 22 officially recommends NDK r26 or newer for Android builds
+          wget -q https://dl.google.com/android/repository/android-ndk-r26c-linux.zip
+          unzip -q android-ndk-r26c-linux.zip
+          echo "ANDROID_NDK_HOME=$PWD/android-ndk-r26c" >> $GITHUB_ENV
+
+      - name: Checkout Node.js
         uses: actions/checkout@v4
         with:
-          repository: termux/termux-packages
-          path: termux-packages
+          repository: nodejs/node
+          ref: v22.12.0
+          path: node
 
-      - name: Patch Node.js to build as shared library
+      - name: Configure and Build libnode.so
         run: |
-          cd termux-packages/packages/nodejs
-          # Termux compiles Node.js as an executable by default.
-          # We inject --shared into the ./configure arguments in termux_step_configure.
-          # We also MUST remove --shared-openssl, --shared-cares, etc., otherwise libnode.so
-          # will have dynamic dependencies on Termux libraries and crash on standard Android.
-          sed -i '/--shared-cares/d' build.sh
-          sed -i '/--shared-ffi/d' build.sh
-          sed -i '/--shared-openssl/d' build.sh
-          sed -i '/--shared-sqlite/d' build.sh
-          sed -i '/--shared-zlib/d' build.sh
-          sed -i '/--with-intl=system-icu/d' build.sh
-          # Inject --shared
-          awk '{ print } /^[[:space:]]*\.\/configure \\/ { print "\t\t--shared \\\n\t\t--openssl-no-asm \\" }' build.sh > build.sh.tmp && mv build.sh.tmp build.sh
+          cd node
+          export CC_host="gcc"
+          export CXX_host="g++"
+          
+          # Run Node.js's native android-configure script
+          # API level 24 is a good modern baseline for Android
+          ./android-configure $ANDROID_NDK_HOME 24 arm64 \
+            --shared \
+            --without-npm \
+            --without-inspector \
+            --openssl-no-asm \
+            --with-intl=small-icu
+          
+          # Build only the libnode shared library
+          make -j$(nproc) libnode
 
-      - name: Build Node.js (aarch64)
+      - name: Collect artifacts
         run: |
-          cd termux-packages
-          ./scripts/run-docker.sh ./build-package.sh -a aarch64 -I nodejs
-
-      - name: Extract libnode.so
-        run: |
-          mkdir -p output
-          cd output
-          dpkg -x ../termux-packages/output/nodejs*.deb .
-          find . -name "libnode.so*" -exec cp {} . \;
+          mkdir -p output/bin/arm64-v8a
+          mkdir -p output/include/node
+          
+          # Copy the shared library
+          find node/out -name "libnode*.so*" -exec cp {} output/bin/arm64-v8a/ \;
+          
+          # Copy necessary headers for C++ JNI bridge compilation
+          cp node/src/*.h output/include/node/
+          cp -r node/deps/v8/include/* output/include/node/
+          cp -r node/deps/uv/include/* output/include/node/
 
       - name: Upload libnode.so Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: libnode-aarch64
-          path: output/libnode.so*
+          name: libnode-arm64-v8a
+          path: output/
