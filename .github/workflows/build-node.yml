@@ -157,20 +157,20 @@ jobs:
       - name: Verify shared library was produced
         run: |
           cd node
-          SOFILE=$(find out -name "libnode.so.*" -o -name "libnode.so" | grep -v '\.d$' | head -n1)
-          if [ -z "$SOFILE" ]; then
+          RAW_SOFILE=$(find out -name "libnode.so.*" -o -name "libnode.so" | grep -v '\.d$' | head -n1)
+          if [ -z "$RAW_SOFILE" ]; then
             echo "ERROR: no libnode.so* produced — build likely fell back to a static binary." >&2
             find out -maxdepth 3 -iname "*node*" >&2
             exit 1
           fi
-          echo "Found: $SOFILE"
-          echo "SOFILE=$SOFILE" >> $GITHUB_ENV
+          echo "Found: $RAW_SOFILE"
+          echo "SOFILE=node/$RAW_SOFILE" >> $GITHUB_ENV
 
       - name: Upload raw libnode.so (failsafe backup)
         uses: actions/upload-artifact@v4
         with:
           name: libnode-raw-${{ matrix.abi }}
-          path: node/${{ env.SOFILE }}
+          path: ${{ env.SOFILE }}
           if-no-files-found: warn
 
       - name: Collect and rename artifacts (fix Android soname requirement)
