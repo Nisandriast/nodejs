@@ -91,18 +91,16 @@ jobs:
           # (default 24). cctest is Node's C++ test binary; it produces no
           # part of libnode.so, so removing this one source from its gyp
           # target is safe and has no effect on the shared library we ship.
-          grep -q "test/cctest/test_crypto_clienthello.cc" node.gyp || {
-            echo "ERROR: anchor line not found in node.gyp — Node source has changed, update this workflow." >&2
-            exit 1
-          }
-
-          sed -i "/'test\/cctest\/test_crypto_clienthello\.cc',/d" node.gyp
-
-          grep -q "test/cctest/test_crypto_clienthello.cc" node.gyp && {
-            echo "ERROR: sed did not remove the line — check the pattern still matches." >&2
-            exit 1
-          }
-          echo "OK: test_crypto_clienthello.cc removed from node.gyp sources."
+          if grep -q "test/cctest/test_crypto_clienthello.cc" node.gyp; then
+            sed -i "/'test\/cctest\/test_crypto_clienthello\.cc',/d" node.gyp
+            grep -q "test/cctest/test_crypto_clienthello.cc" node.gyp && {
+              echo "ERROR: sed did not remove the line — check the pattern still matches." >&2
+              exit 1
+            }
+            echo "OK: test_crypto_clienthello.cc removed from node.gyp sources."
+          else
+            echo "OK: test_crypto_clienthello.cc not found (expected in Node v22+)."
+          fi
 
       - name: Fix Android CRC32 link failure (deps/zlib missing NDK cpufeatures)
         run: |
@@ -159,7 +157,7 @@ jobs:
       - name: Verify shared library was produced
         run: |
           cd node
-          SOFILE=$(find out -name "libnode.so.*" -o -name "libnode.so" | head -n1)
+          SOFILE=$(find out -name "libnode.so.*" -o -name "libnode.so" | grep -v '\.d$' | head -n1)
           if [ -z "$SOFILE" ]; then
             echo "ERROR: no libnode.so* produced — build likely fell back to a static binary." >&2
             find out -maxdepth 3 -iname "*node*" >&2
@@ -179,7 +177,10 @@ jobs:
           # The raw build output is versioned (libnode.so.<NODE_MODULE_VERSION>).
           # objcopy rewrites the internal SONAME to match, then we copy under
           # the plain name so it links/loads correctly on-device.
-          if command -v objcopy >/dev/null 2>&1; then
+          LLVM_OBJCOPY="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-objcopy"
+          if [ -x "$LLVM_OBJCOPY" ]; then
+            "$LLVM_OBJCOPY" --set-soname libnode.so "$SOFILE" "output/bin/${{ matrix.abi }}/libnode.so"
+          elif command -v objcopy >/dev/null 2>&1; then
             objcopy --set-soname libnode.so "$SOFILE" "output/bin/${{ matrix.abi }}/libnode.so"
           else
             cp "$SOFILE" "output/bin/${{ matrix.abi }}/libnode.so"
