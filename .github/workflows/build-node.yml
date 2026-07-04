@@ -5,7 +5,7 @@ on:
       node_ref:
         description: 'Node.js tag/branch to build (Stagehand needs ^20.19.0 || >=22.12.0)'
         required: true
-        default: 'v20.19.0'
+        default: 'v20.19.5'
       ndk_version:
         description: 'NDK version (folder name after unzip)'
         required: true
@@ -85,7 +85,14 @@ jobs:
           export CXX_host="g++"
 
           ./android-configure "$ANDROID_NDK_HOME" ${{ github.event.inputs.android_api }} ${{ matrix.arch }}
-          make -j"$(nproc)"
+
+          # Build only the "node" gyp target, not the default "all" target.
+          # "all" also pulls in cctest (Node's C++ test binary), which is
+          # irrelevant for a shared-lib embed and fails on API < 28 because
+          # test/cctest/test_crypto_clienthello.cc uses aligned_alloc(),
+          # which Bionic doesn't declare until API 28. Skipping cctest
+          # avoids the failure entirely and saves a lot of build time.
+          make -j"$(nproc)" node
 
       - name: Verify shared library was produced
         run: |
