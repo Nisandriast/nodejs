@@ -11,9 +11,9 @@ on:
         required: true
         default: 'r26c'
       android_api:
-        description: 'Android SDK/API level (min 24)'
+        description: 'Android SDK/API level (min 28)'
         required: true
-        default: '24'
+        default: '28'
 
 jobs:
   build:
@@ -78,6 +78,32 @@ jobs:
             exit 1
           }
 
+      - name: Drop unbuildable cctest source (aligned_alloc needs API 28+)
+        run: |
+          cd node
+          # test/cctest/test_crypto_clienthello.cc calls aligned_alloc(),
+          # which Bionic doesn't declare below Android API 28 (see
+          # https://github.com/official-stockfish/Stockfish/issues/2979 for
+          # the same symptom in another cross-compiled project). Node's
+          # own android-configure/docs don't special-case cctest at all —
+          # they just say `make` — so this file fails whenever the target
+          # API is < 28, which our workflow's whole point is to support
+          # (default 24). cctest is Node's C++ test binary; it produces no
+          # part of libnode.so, so removing this one source from its gyp
+          # target is safe and has no effect on the shared library we ship.
+          grep -q "test/cctest/test_crypto_clienthello.cc" node.gyp || {
+            echo "ERROR: anchor line not found in node.gyp — Node source has changed, update this workflow." >&2
+            exit 1
+          }
+
+          sed -i "/'test\/cctest\/test_crypto_clienthello\.cc',/d" node.gyp
+
+          grep -q "test/cctest/test_crypto_clienthello.cc" node.gyp && {
+            echo "ERROR: sed did not remove the line — check the pattern still matches." >&2
+            exit 1
+          }
+          echo "OK: test_crypto_clienthello.cc removed from node.gyp sources."
+
       - name: Configure and build libnode.so (${{ matrix.arch }})
         run: |
           cd node
@@ -85,14 +111,7 @@ jobs:
           export CXX_host="g++"
 
           ./android-configure "$ANDROID_NDK_HOME" ${{ github.event.inputs.android_api }} ${{ matrix.arch }}
-
-          # Build only the "node" gyp target, not the default "all" target.
-          # "all" also pulls in cctest (Node's C++ test binary), which is
-          # irrelevant for a shared-lib embed and fails on API < 28 because
-          # test/cctest/test_crypto_clienthello.cc uses aligned_alloc(),
-          # which Bionic doesn't declare until API 28. Skipping cctest
-          # avoids the failure entirely and saves a lot of build time.
-          make -j"$(nproc)" node
+          make -j"$(nproc)"
 
       - name: Verify shared library was produced
         run: |
