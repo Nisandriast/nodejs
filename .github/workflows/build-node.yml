@@ -11,7 +11,7 @@ on:
         required: true
         default: 'r26c'
       android_api:
-        description: 'Android SDK/API level (min 28)'
+        description: 'Android SDK/API level (min 24)'
         required: true
         default: '28'
 
@@ -103,6 +103,49 @@ jobs:
             exit 1
           }
           echo "OK: test_crypto_clienthello.cc removed from node.gyp sources."
+
+      - name: Fix Android CRC32 link failure (deps/zlib missing NDK cpufeatures)
+        run: |
+          set -e
+          NDK_CPUFEATURES_DIR="$ANDROID_NDK_HOME/sources/android/cpufeatures"
+          if [ ! -f "$NDK_CPUFEATURES_DIR/cpu-features.c" ]; then
+            echo "ERROR: $NDK_CPUFEATURES_DIR/cpu-features.c not found in this NDK." >&2
+            echo "Google still ships it (deprecated, source-compat only) as of" >&2
+            echo "https://developer.android.com/ndk/guides/cpu-features - if a" >&2
+            echo "future NDK removes it, this workflow needs a different fix." >&2
+            exit 1
+          fi
+
+          # Root cause (confirmed against the actual node.gyp/BUILD.gn for
+          # this ref): deps/zlib/cpu_features.c calls android_getCpuFeatures()
+          # or android_getCpuFamily() for ANY Android ARM target (32 or 64-
+          # bit) when built with CRC32 hardware-acceleration enabled. Node's
+          # deps/zlib/zlib.gyp mirrors Chromium's BUILD.gn by scraping only
+          # each target's "sources" list - it never mirrors the "deps" line
+          # that, in the real Chromium GN build, pulls in
+          # "//third_party/cpu_features:ndk_compat" to supply those two
+          # symbols on Android. That gap is a known, still-open upstream
+          # Node.js bug: https://github.com/nodejs/node/issues/46749 and
+          # https://github.com/nodejs/node/issues/49766. cctest/embedtest
+          # just happen to be the first targets that fully link against
+          # libnode.so and surface it; libnode.so itself is built with the
+          # same dangling symbol and would fail to load on-device.
+          #
+          # Fix: compile the NDK's own (deprecated but still-shipped)
+          # cpufeatures compat source directly into zlib, closing the gap
+          # the same way Chromium's real dependency does.
+          mkdir -p node/deps/zlib/android_ndk_compat
+          cp "$NDK_CPUFEATURES_DIR/cpu-features.c" "$NDK_CPUFEATURES_DIR/cpu-features.h" node/deps/zlib/android_ndk_compat/
+
+          # The patch script is base64-encoded because it contains gyp text
+          # with variable/shallow indentation (down to 4 spaces on closing
+          # braces) that cannot be embedded as a plain YAML block scalar
+          # nested under this step's indentation level.
+          echo "b2xkID0gJycnICAgICAgICAgICAgWydhcm1fZnB1PT0ibmVvbiInLCB7CiAgICAgICAgICAgICAgJ2RlZmluZXMnOiBbCiAgICAgICAgICAgICAgICAnX19BUk1fTkVPTl9fJywKICAgICAgICAgICAgICAgICdERUZMQVRFX1NMSURFX0hBU0hfTkVPTicsCiAgICAgICAgICAgICAgXSwKICAgICAgICAgICAgICAnY29uZGl0aW9ucyc6IFsKICAgICAgICAgICAgICAgIFsnT1M9PSJ3aW4iJywgewogICAgICAgICAgICAgICAgICAnZGVmaW5lcyc6IFsgJ0FSTVY4X09TX1dJTkRPV1MnIF0sCiAgICAgICAgICAgICAgICB9LCB7CiAgICAgICAgICAgICAgICAgICdjb25kaXRpb25zJzogWwogICAgICAgICAgICAgICAgICAgIFsnT1MhPSJpb3MiJywgewogICAgICAgICAgICAgICAgICAgICAgJ2RlcGVuZGVuY2llcyc6IFsKICAgICAgICAgICAgICAgICAgICAgICAgJ3psaWJfYWRsZXIzMl9zaW1kJywKICAgICAgICAgICAgICAgICAgICAgICAgJ3psaWJfYXJtX2NyYzMyJywKICAgICAgICAgICAgICAgICAgICAgIF0sCiAgICAgICAgICAgICAgICAgICAgfV0sCiAgICAgICAgICAgICAgICAgIF0sCiAgICAgICAgICAgICAgICB9XSwKICAgICAgICAgICAgICAgIFsndGFyZ2V0X2FyY2g9PSJhcm02NCInLCB7CiAgICAgICAgICAgICAgICAgICdkZWZpbmVzJzogWyAnSU5GTEFURV9DSFVOS19SRUFEXzY0TEUnIF0sCiAgICAgICAgICAgICAgICB9XSwKICAgICAgICAgICAgICBdLAogICAgICAgICAgICB9XSwKICAgICAgICAgIF0sCiAgICAgICAgfSwKICAgICAgXSwKICAgIH0sIHsnJycKCm5ldyA9ICcnJyAgICAgICAgICAgIFsnYXJtX2ZwdT09Im5lb24iJywgewogICAgICAgICAgICAgICdkZWZpbmVzJzogWwogICAgICAgICAgICAgICAgJ19fQVJNX05FT05fXycsCiAgICAgICAgICAgICAgICAnREVGTEFURV9TTElERV9IQVNIX05FT04nLAogICAgICAgICAgICAgIF0sCiAgICAgICAgICAgICAgJ2NvbmRpdGlvbnMnOiBbCiAgICAgICAgICAgICAgICBbJ09TPT0id2luIicsIHsKICAgICAgICAgICAgICAgICAgJ2RlZmluZXMnOiBbICdBUk1WOF9PU19XSU5ET1dTJyBdLAogICAgICAgICAgICAgICAgfSwgewogICAgICAgICAgICAgICAgICAnY29uZGl0aW9ucyc6IFsKICAgICAgICAgICAgICAgICAgICBbJ09TIT0iaW9zIicsIHsKICAgICAgICAgICAgICAgICAgICAgICdkZXBlbmRlbmNpZXMnOiBbCiAgICAgICAgICAgICAgICAgICAgICAgICd6bGliX2FkbGVyMzJfc2ltZCcsCiAgICAgICAgICAgICAgICAgICAgICAgICd6bGliX2FybV9jcmMzMicsCiAgICAgICAgICAgICAgICAgICAgICBdLAogICAgICAgICAgICAgICAgICAgIH1dLAogICAgICAgICAgICAgICAgICBdLAogICAgICAgICAgICAgICAgfV0sCiAgICAgICAgICAgICAgICBbJ3RhcmdldF9hcmNoPT0iYXJtNjQiJywgewogICAgICAgICAgICAgICAgICAnZGVmaW5lcyc6IFsgJ0lORkxBVEVfQ0hVTktfUkVBRF82NExFJyBdLAogICAgICAgICAgICAgICAgfV0sCiAgICAgICAgICAgICAgXSwKICAgICAgICAgICAgfV0sCiAgICAgICAgICAgIFsnT1M9PSJhbmRyb2lkIicsIHsKICAgICAgICAgICAgICAjIFVwc3RyZWFtIENocm9taXVtJ3MgQlVJTEQuZ24gYWRkcyBhCiAgICAgICAgICAgICAgIyAiLy90aGlyZF9wYXJ0eS9jcHVfZmVhdHVyZXM6bmRrX2NvbXBhdCIgR04gZGVwZW5kZW5jeSBoZXJlIHRvCiAgICAgICAgICAgICAgIyBzdXBwbHkgYW5kcm9pZF9nZXRDcHVGZWF0dXJlcygpL2FuZHJvaWRfZ2V0Q3B1RmFtaWx5KCksIHdoaWNoCiAgICAgICAgICAgICAgIyBjcHVfZmVhdHVyZXMuYyAoaW4gdGhpcyB0YXJnZXQncyBzY3JhcGVkIHNvdXJjZXMpIGNhbGxzIHdoZW4KICAgICAgICAgICAgICAjIEFSTVY4X09TX0FORFJPSUQgaXMgZGVmaW5lZC4gVGhpcyAuZ3lwIGZpbGUgaXMgZ2VuZXJhdGVkIGJ5CiAgICAgICAgICAgICAgIyBzY3JhcGluZyBvbmx5IHRoZSAic291cmNlcyIgbGluZXMgb3V0IG9mIEJVSUxELmduLCBzbyB0aGF0CiAgICAgICAgICAgICAgIyBHTi1vbmx5ICJkZXBzIiBsaW5lIG5ldmVyIG1hZGUgaXQgYWNyb3NzLCBsZWF2aW5nIHRob3NlIHR3bwogICAgICAgICAgICAgICMgc3ltYm9scyB1bmRlZmluZWQgYXQgZmluYWwgbGluayB0aW1lIG9uIEFuZHJvaWQKICAgICAgICAgICAgICAjIChzZWUgbm9kZWpzL25vZGUjNDY3NDkgYW5kIG5vZGVqcy9ub2RlIzQ5NzY2LCBib3RoIHN0aWxsCiAgICAgICAgICAgICAgIyBvcGVuIHVwc3RyZWFtKS4gQ29tcGlsZSBpbiB0aGUgTkRLJ3Mgb3duIGNwdWZlYXR1cmVzIGNvbXBhdAogICAgICAgICAgICAgICMgc291cmNlIGRpcmVjdGx5IHRvIGNsb3NlIHRoYXQgZ2FwLgogICAgICAgICAgICAgICdpbmNsdWRlX2RpcnMnOiBbICc8KFpMSUJfUk9PVCkvYW5kcm9pZF9uZGtfY29tcGF0JyBdLAogICAgICAgICAgICAgICdzb3VyY2VzJzogWyAnPChaTElCX1JPT1QpL2FuZHJvaWRfbmRrX2NvbXBhdC9jcHUtZmVhdHVyZXMuYycgXSwKICAgICAgICAgICAgfV0sCiAgICAgICAgICBdLAogICAgICAgIH0sCiAgICAgIF0sCiAgICB9LCB7JycnCgpwYXRoID0gJ2RlcHMvemxpYi96bGliLmd5cCcKd2l0aCBvcGVuKHBhdGgpIGFzIGY6CiAgICBjb250ZW50ID0gZi5yZWFkKCkKCmNvdW50ID0gY29udGVudC5jb3VudChvbGQpCmlmIGNvdW50ICE9IDE6CiAgICByYWlzZSBTeXN0ZW1FeGl0KAogICAgICAgIGYiRVJST1I6IGFuY2hvciBibG9jayBmb3VuZCB7Y291bnR9IHRpbWVzIGluIHtwYXRofSAoZXhwZWN0ZWQgMSkgLSAiCiAgICAgICAgIk5vZGUncyB6bGliLmd5cCBoYXMgY2hhbmdlZCwgdXBkYXRlIHRoaXMgd29ya2Zsb3cuIgogICAgKQoKd2l0aCBvcGVuKHBhdGgsICd3JykgYXMgZjoKICAgIGYud3JpdGUoY29udGVudC5yZXBsYWNlKG9sZCwgbmV3KSkKCnByaW50KCJPSzogemxpYi5neXAgcGF0Y2hlZCB0byBjb21waWxlIGluIHRoZSBOREsgY3B1ZmVhdHVyZXMgY29tcGF0IHNvdXJjZS4iKQo=" | base64 -d > node/patch_zlib_gyp.py
+
+          cd node
+          python3 patch_zlib_gyp.py
+          rm patch_zlib_gyp.py
 
       - name: Configure and build libnode.so (${{ matrix.arch }})
         run: |
