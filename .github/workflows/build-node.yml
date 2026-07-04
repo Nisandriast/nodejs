@@ -35,7 +35,7 @@ jobs:
       - name: Install build prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install -y make g++ gcc
+          sudo apt-get install -y make g++ gcc patchelf
 
       - name: Set up Python 3.11
         # android-configure's shell preamble probes for python3.11 down to
@@ -166,6 +166,13 @@ jobs:
           echo "Found: $SOFILE"
           echo "SOFILE=$SOFILE" >> $GITHUB_ENV
 
+      - name: Upload raw libnode.so (failsafe backup)
+        uses: actions/upload-artifact@v4
+        with:
+          name: libnode-raw-${{ matrix.abi }}
+          path: node/${{ env.SOFILE }}
+          if-no-files-found: warn
+
       - name: Collect and rename artifacts (fix Android soname requirement)
         run: |
           mkdir -p output/bin/${{ matrix.abi }}
@@ -175,15 +182,11 @@ jobs:
           # Android's dynamic linker / System.loadLibrary() and your CMake
           # IMPORTED_LOCATION expect an exact "libnode.so" filename.
           # The raw build output is versioned (libnode.so.<NODE_MODULE_VERSION>).
-          # objcopy rewrites the internal SONAME to match, then we copy under
-          # the plain name so it links/loads correctly on-device.
-          LLVM_OBJCOPY="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-objcopy"
-          if [ -x "$LLVM_OBJCOPY" ]; then
-            "$LLVM_OBJCOPY" --set-soname libnode.so "$SOFILE" "output/bin/${{ matrix.abi }}/libnode.so"
-          elif command -v objcopy >/dev/null 2>&1; then
-            objcopy --set-soname libnode.so "$SOFILE" "output/bin/${{ matrix.abi }}/libnode.so"
+          cp "$SOFILE" "output/bin/${{ matrix.abi }}/libnode.so"
+          if command -v patchelf >/dev/null 2>&1; then
+            patchelf --set-soname libnode.so "output/bin/${{ matrix.abi }}/libnode.so"
           else
-            cp "$SOFILE" "output/bin/${{ matrix.abi }}/libnode.so"
+            echo "WARNING: patchelf not found, SONAME not updated. (Might be fine if CMake handles it)" >&2
           fi
 
           # Headers needed for embedding: node core + N-API + libuv.
